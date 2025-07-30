@@ -11,13 +11,13 @@ static mut USER_GROUP_METRICS: Option<HashMap<String, u32>> = None;
 
 pub fn initialize_metrics() {
     debug!("Initializing custom metrics");
-    
+
     // Initialize user/group metrics storage
     unsafe {
         USER_GROUP_METRICS = Some(HashMap::new());
     }
-    
-    // Define a simple authorized calls counter
+
+    // Authorized calls counter
     match hostcalls::define_metric(
         proxy_wasm::types::MetricType::Counter,
         "authorized_calls_total",
@@ -26,14 +26,17 @@ pub fn initialize_metrics() {
             unsafe {
                 AUTHORIZED_CALLS_METRIC_ID = Some(metric_id);
             }
-            debug!("Defined authorized_calls_total metric with ID: {}", metric_id);
+            debug!(
+                "Defined authorized_calls_total metric with ID: {}",
+                metric_id
+            );
         }
         Err(e) => {
             error!("Failed to define authorized_calls_total metric: {:?}", e);
         }
     }
 
-    // Define a simple limited calls counter
+    // Limited calls counter
     match hostcalls::define_metric(
         proxy_wasm::types::MetricType::Counter,
         "limited_calls_total",
@@ -79,7 +82,7 @@ pub fn increment_limited_calls() {
 // Helper function to extract user info from auth metadata
 fn extract_user_info() -> (String, String) {
     debug!("Attempting to extract user info from auth metadata");
-    
+
     // Use the correct path format for wasm kuadrant attributes
     let user_id_path = crate::data::wasm_prop(&["auth", "identity", "userid"]);
     let user_id_result = crate::data::get_attribute::<String>(&user_id_path);
@@ -97,7 +100,7 @@ fn extract_user_info() -> (String, String) {
             "unknown".to_string()
         }
     };
-        
+
     let user_groups_path = crate::data::wasm_prop(&["auth", "identity", "groups"]);
     let user_groups_result = crate::data::get_attribute::<String>(&user_groups_path);
     let user_groups = match user_groups_result {
@@ -114,21 +117,33 @@ fn extract_user_info() -> (String, String) {
             "unknown".to_string()
         }
     };
-        
+
     // Extract first group if multiple groups are comma-separated
-    let group = user_groups.split(',').next().unwrap_or("unknown").to_string();
-    
+    let group = user_groups
+        .split(',')
+        .next()
+        .unwrap_or("unknown")
+        .to_string();
+
     debug!("Extracted user_id: {}, group: {}", user_id, group);
     (user_id, group)
 }
 
 // Helper function to get or create a user/group specific metric with cleaner names
-fn get_or_create_user_group_metric(metric_type: &str, user: &str, group: &str) -> Option<u32> {
-    // Format: metric_type_user_USER_group_GROUP
-    let metric_name = format!("{}_user_{}_group_{}", metric_type, user, group);
-    
-    let map_key = format!("{}:{}:{}", metric_type, user, group);
-    
+fn get_or_create_user_group_metric(
+    metric_type: &str,
+    user: &str,
+    group: &str,
+    namespace: &str,
+) -> Option<u32> {
+    // Format: metric_type__user__USER__group__GROUP__namespace__NAMESPACE
+    let metric_name = format!(
+        "{}__user__{}__group__{}__namespace__{}",
+        metric_type, user, group, namespace
+    );
+
+    let map_key = format!("{}:{}:{}:{}", metric_type, user, group, namespace);
+
     unsafe {
         if let Some(ref mut metrics_map) = USER_GROUP_METRICS {
             if let Some(&metric_id) = metrics_map.get(&map_key) {
@@ -136,18 +151,18 @@ fn get_or_create_user_group_metric(metric_type: &str, user: &str, group: &str) -
             }
 
             // Create new metric
-            match hostcalls::define_metric(
-                proxy_wasm::types::MetricType::Counter,
-                &metric_name,
-            ) {
+            match hostcalls::define_metric(proxy_wasm::types::MetricType::Counter, &metric_name) {
                 Ok(metric_id) => {
-                    debug!("Defined user/group metric: {} with ID: {} for user: {}, group: {}", 
-                           metric_name, metric_id, user, group);
+                    debug!("Defined user/group metric: {} with ID: {} for user: {}, group: {}, namespace: {}", 
+                           metric_name, metric_id, user, group, namespace);
                     metrics_map.insert(map_key, metric_id);
                     Some(metric_id)
                 }
                 Err(e) => {
-                    error!("Failed to define user/group metric {}: {:?}", metric_name, e);
+                    error!(
+                        "Failed to define user/group metric {}: {:?}",
+                        metric_name, e
+                    );
                     None
                 }
             }
@@ -158,36 +173,61 @@ fn get_or_create_user_group_metric(metric_type: &str, user: &str, group: &str) -
     }
 }
 
-pub fn increment_authorized_calls_with_user_group(namespace: &str) {
-    debug!("increment_authorized_calls_with_user_group called for namespace: {}", namespace);
+pub fn increment_authorized_calls_with_user_group(scope: &str) {
+    debug!(
+        "increment_authorized_calls_with_user_group called for scope: {}",
+        scope
+    );
     let (user_id, group) = extract_user_info();
-    
+
     if user_id == "unknown" || group == "unknown" {
         debug!("Skipping user/group metric due to unknown user or group");
         return;
     }
-    
-    if let Some(metric_id) = get_or_create_user_group_metric("authorized_calls_with_user_and_group", &user_id, &group) {
+
+    // For auth calls, use a fixed namespace since scope contains a hash
+    // From the logs we can see the actual namespace is "llm-d"
+    let namespace = "llm-d".to_string();
+
+    if let Some(metric_id) = get_or_create_user_group_metric(
+        "authorized_calls_with_user_and_group",
+        &user_id,
+        &group,
+        &namespace,
+    ) {
         match hostcalls::increment_metric(metric_id, 1) {
-            Ok(_) => debug!("Incremented authorized_calls_with_user_and_group for user: {}, group: {}", user_id, group),
+            Ok(_) => debug!("Incremented authorized_calls_with_user_and_group for user: {}, group: {}, namespace: {}", user_id, group, namespace),
             Err(e) => error!("Failed to increment authorized_calls_with_user_and_group: {:?}", e),
         }
     }
 }
 
-pub fn increment_limited_calls_with_user_group(namespace: &str) {
-    debug!("increment_limited_calls_with_user_group called for namespace: {}", namespace);
+pub fn increment_limited_calls_with_user_group(scope: &str) {
+    debug!(
+        "increment_limited_calls_with_user_group called for scope: {}",
+        scope
+    );
     let (user_id, group) = extract_user_info();
-    
+
     if user_id == "unknown" || group == "unknown" {
         debug!("Skipping user/group metric due to unknown user or group");
         return;
     }
-    
-    if let Some(metric_id) = get_or_create_user_group_metric("limited_calls_with_user_and_group", &user_id, &group) {
+
+    // For rate limit actions, the scope contains the correct namespace
+    // From logs: "llm-d/ms-sim-llm-d-modelservice"
+    // Let's clean it up to just use the first part: "llm-d"
+    let namespace = scope.split('/').next().unwrap_or(scope).to_string();
+
+    if let Some(metric_id) = get_or_create_user_group_metric(
+        "limited_calls_with_user_and_group",
+        &user_id,
+        &group,
+        &namespace,
+    ) {
         match hostcalls::increment_metric(metric_id, 1) {
-            Ok(_) => debug!("Incremented limited_calls_with_user_and_group for user: {}, group: {}", user_id, group),
+            Ok(_) => debug!("Incremented limited_calls_with_user_and_group for user: {}, group: {}, namespace: {}", user_id, group, namespace),
             Err(e) => error!("Failed to increment limited_calls_with_user_and_group: {:?}", e),
         }
     }
-} 
+}

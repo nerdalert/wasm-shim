@@ -1,6 +1,11 @@
 use log::error;
 use proxy_wasm::hostcalls;
 use std::collections::HashMap;
+use std::cell::RefCell;
+
+thread_local! {
+    static CURRENT_ACTION_SCOPE: RefCell<Option<String>> = RefCell::new(None);
+}
 
 // Simple metric IDs
 static mut AUTHORIZED_CALLS_METRIC_ID: Option<u32> = None;
@@ -239,11 +244,13 @@ fn get_or_create_user_group_metric(
 }
 
 fn extract_namespace_from_scope(scope: &str) -> String {
-    if scope.contains('/') {
+    let namespace = if scope.contains('/') {
         scope.split('/').next().unwrap_or("default").to_string()
     } else {
         "default".to_string()
-    }
+    };
+    log::debug!("TMP_DEBUG extract_namespace_from_scope: scope='{}' -> namespace='{}'", scope, namespace);
+    namespace
 }
 
 pub fn increment_authorized_calls_with_user_group(scope: &str) {
@@ -254,6 +261,7 @@ pub fn increment_authorized_calls_with_user_group(scope: &str) {
     }
 
     let namespace = extract_namespace_from_scope(scope);
+    log::debug!("TMP_DEBUG increment_authorized_calls_with_user_group: user={}, group={}, namespace={}", user_id, group, namespace);
 
     if let Some(metric_id) = get_or_create_user_group_metric(
         "authorized_calls_with_user_and_group",
@@ -279,6 +287,7 @@ pub fn increment_limited_calls_with_user_group(scope: &str) {
     }
 
     let namespace = extract_namespace_from_scope(scope);
+    log::debug!("TMP_DEBUG increment_limited_calls_with_user_group: user={}, group={}, namespace={}", user_id, group, namespace);
 
     if let Some(metric_id) = get_or_create_user_group_metric(
         "limited_calls_with_user_and_group",
@@ -304,6 +313,7 @@ pub fn increment_token_usage_with_user_group(tokens: i64, scope: &str) {
     }
 
     let namespace = extract_namespace_from_scope(scope);
+    log::debug!("TMP_DEBUG increment_token_usage_with_user_group: tokens={}, scope='{}', user={}, group={}, namespace={}", tokens, scope, user_id, group, namespace);
 
     if let Some(metric_id) = get_or_create_user_group_metric(
         "token_usage_with_user_and_group",
@@ -322,16 +332,44 @@ pub fn increment_token_usage_with_user_group(tokens: i64, scope: &str) {
 }
 
 pub fn process_response_headers_for_token_usage() {
+    let current_scope = get_current_action_scope();
+    log::debug!("TMP_DEBUG process_response_headers_for_token_usage using current scope: '{}'", current_scope);
     if let Some(token_count) = extract_token_count_from_headers() {
+        log::debug!("TMP_DEBUG process_response_headers_for_token_usage: found {} tokens", token_count);
         increment_token_usage(token_count);
-        increment_token_usage_with_user_group(token_count, "default");
+        increment_token_usage_with_user_group(token_count, &current_scope);
         return;
     }
 }
 
+
 pub fn process_response_body_for_token_usage() {
+    let current_scope = get_current_action_scope();
+    log::debug!("TMP_DEBUG process_response_body_for_token_usage using current scope: '{}'", current_scope);
     if let Some(token_count) = extract_token_count_from_response_body() {
+        log::debug!("TMP_DEBUG process_response_body_for_token_usage: found {} tokens", token_count);
         increment_token_usage(token_count);
-        increment_token_usage_with_user_group(token_count, "default");
+        increment_token_usage_with_user_group(token_count, &current_scope);
     }
 }
+
+pub fn set_current_action_scope(scope: &str) {
+    CURRENT_ACTION_SCOPE.with(|s| {
+        *s.borrow_mut() = Some(scope.to_string());
+    });
+    log::debug!("TMP_DEBUG set_current_action_scope: '{}'", scope);
+}
+
+pub fn clear_current_action_scope() {
+    CURRENT_ACTION_SCOPE.with(|s| {
+        *s.borrow_mut() = None;
+    });
+    log::debug!("TMP_DEBUG clear_current_action_scope");
+}
+
+fn get_current_action_scope() -> String {
+    CURRENT_ACTION_SCOPE.with(|s| {
+        s.borrow().clone().unwrap_or_else(|| "default".to_string())
+    })
+}
+

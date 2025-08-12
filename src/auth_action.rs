@@ -72,6 +72,8 @@ impl AuthAction {
             Some(CheckResponse_oneof_http_response::ok_response(ok_response)) => {
                 debug!("process_response(auth): received OkHttpResponse");
 
+                log::debug!("TMP_DEBUG auth_action process_response: scope='{}'", &self.scope);
+                crate::metrics::set_current_action_scope(&self.scope);
                 // Increment authorized calls metric
                 crate::metrics::increment_authorized_calls();
 

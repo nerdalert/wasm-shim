@@ -319,6 +319,8 @@ impl RateLimitAction {
             } => {
                 debug!("process_response(rl): received OVER_LIMIT response");
 
+                log::debug!("TMP_DEBUG ratelimit_action process_response OVER_LIMIT: scope='{}'", &self.scope);
+                crate::metrics::set_current_action_scope(&self.scope);
                 // Increment limited calls metric
                 crate::metrics::increment_limited_calls();
                 
@@ -338,6 +340,8 @@ impl RateLimitAction {
                 ..
             } => {
                 debug!("process_response(rl): received OK response");
+                log::debug!("TMP_DEBUG ratelimit_action process_response OK: scope='{}'", &self.scope);
+                crate::metrics::set_current_action_scope(&self.scope);
                 Ok(vec![EventualOperation::AddResponseHeaders(
                     from_envoy_rl_headers(additional_headers),
                 )]
